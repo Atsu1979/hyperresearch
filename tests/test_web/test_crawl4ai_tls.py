@@ -120,19 +120,62 @@ def test_managed_browser_launch_drops_cert_ignore_flags():
 
 def test_stripping_is_per_instance_not_global():
     """The override must not leak into crawl4ai's classes or other crawlers."""
-    from crawl4ai.browser_manager import ManagedBrowser
+    from crawl4ai.browser_manager import BrowserManager, ManagedBrowser
+
+    class_flags = ManagedBrowser.__dict__["build_browser_flags"]
+    class_args = BrowserManager.__dict__["_build_browser_args"]
 
     inst = provider.Crawl4AIProvider(headless=True, user_data_dir="/tmp/does-not-matter")
-    inst._make_crawler()
-    assert set(ManagedBrowser.build_browser_flags(inst._browser_config)) >= CERT_FLAGS
+    bm = inst._make_crawler().crawler_strategy.browser_manager
+
+    # The overrides live on this instance only ...
+    assert "_build_browser_args" in vars(bm)
+    assert "build_browser_flags" in vars(bm.managed_browser)
+    # ... and the crawl4ai classes are untouched.
+    assert ManagedBrowser.__dict__["build_browser_flags"] is class_flags
+    assert BrowserManager.__dict__["_build_browser_args"] is class_args
 
 
 def test_opt_out_keeps_crawl4ai_launch_flags():
+    """With browser_verify_tls = false nothing is stripped: the launch args are
+    exactly what the installed crawl4ai builds. (crawl4ai <= 0.8 always added the
+    cert-ignore flags; 0.9 adds them only when ignore_https_errors is set.)"""
     inst = provider.Crawl4AIProvider(
         headless=True, settings=FetchSettings(browser_verify_tls=False)
     )
-    args = inst._make_crawler().crawler_strategy.browser_manager._build_browser_args()["args"]
-    assert set(args) >= CERT_FLAGS
+    bm = inst._make_crawler().crawler_strategy.browser_manager
+    assert "_build_browser_args" not in vars(bm)
+    assert bm._build_browser_args()["args"] == type(bm)._build_browser_args(bm)["args"]
+
+
+class _FlagEmittingManager:
+    """Stands in for a crawl4ai BrowserManager that adds the cert-ignore flags
+    unconditionally, as crawl4ai 0.8.x did, whatever version is installed."""
+
+    def __init__(self) -> None:
+        self.managed_browser = _FlagEmittingManaged()
+
+    def _build_browser_args(self) -> dict:
+        return {"args": ["--no-sandbox", *sorted(CERT_FLAGS)], "headless": True}
+
+
+class _FlagEmittingManaged:
+    @staticmethod
+    def build_browser_flags(config) -> list[str]:
+        return ["--disable-gpu", *sorted(CERT_FLAGS)]
+
+
+def test_strip_removes_flags_a_crawl4ai_release_adds_unconditionally():
+    class _Strategy:
+        browser_manager = _FlagEmittingManager()
+
+    strategy = _Strategy()
+    provider._strip_cert_ignore_flags(strategy)
+    bm = strategy.browser_manager
+    assert bm._build_browser_args() == {"args": ["--no-sandbox"], "headless": True}
+    assert bm.managed_browser.build_browser_flags(object()) == ["--disable-gpu"]
+    # The class the instance came from still emits them: per-instance only.
+    assert set(_FlagEmittingManaged.build_browser_flags(object())) >= CERT_FLAGS
 
 
 def test_missing_flag_builder_fails_closed():

@@ -21,6 +21,20 @@ from hyperresearch.web.base import WebResult
 from hyperresearch.web.crawl4ai_provider import Crawl4AIProvider
 
 
+@pytest.fixture(autouse=True)
+def _offline_dns(monkeypatch):
+    """fetch() runs the SSRF gate first, which resolves the host. Answer with a
+    public address so these tests stay offline (CI runners and sandboxes may
+    have no DNS) and still exercise the real gate."""
+    import ipaddress
+
+    from hyperresearch.web import safe_http
+
+    monkeypatch.setattr(
+        safe_http, "_resolve", lambda host: [ipaddress.ip_address("93.184.216.34")]
+    )
+
+
 def _run_on_a_fresh_thread(coro):
     """Run ``coro`` to completion on a brand-new thread, guaranteeing a real,
     isolated running event loop for the duration of the call.

@@ -1,5 +1,7 @@
 <img width="1280" height="400" alt="hyperresearch-readme-hero-1280x400" src="https://github.com/user-attachments/assets/320680fc-bc56-4eac-9ec2-7ec46d4bde98" />
 
+<p align="center"><a href="README.ja.md">日本語 README（このフォークの変更点と実測結果）</a></p>
+
 <h3 align="center">The Most Powerful Deep Research Harness: a deep research skill for Claude Code and OpenAI Codex</h3>
 
 <p align="center">
