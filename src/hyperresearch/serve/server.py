@@ -340,6 +340,11 @@ GRAPH_JS = """
 """
 
 
+# Host header names a browser sends for this server when the user opens it
+# directly (the printed URL uses 127.0.0.1; localhost and ::1 also reach it).
+_LOOPBACK_HOSTNAMES = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
 class HyperresearchHandler(BaseHTTPRequestHandler):
     # Bound reads from browser preconnections that never send a request.
     timeout = 30
@@ -362,7 +367,31 @@ class HyperresearchHandler(BaseHTTPRequestHandler):
                 self._db.close()
                 self._db = None
 
+    def _host_allowed(self) -> bool:
+        """Refuse requests whose Host header is not this loopback server.
+
+        The server binds 127.0.0.1, but a web page the user visits can still
+        reach it through DNS rebinding: attacker.example resolves first to the
+        attacker's server, then to 127.0.0.1, and the page's script reads the
+        vault same-origin. The browser keeps sending ``Host: attacker.example``
+        throughout, so accepting only loopback names closes that path.
+        """
+        host = (self.headers.get("Host") or "").strip().lower()
+        if not host:
+            return False
+        if host.startswith("["):
+            name, _, rest = host[1:].partition("]")
+            port = rest[1:] if rest.startswith(":") else ""
+        else:
+            name, _, port = host.partition(":")
+        if name not in _LOOPBACK_HOSTNAMES:
+            return False
+        return port == "" or port == str(self.server.server_address[1])
+
     def do_GET(self):
+        if not self._host_allowed():
+            self._send_plain(421, "Misdirected Request: Host header is not this local server.\n")
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
@@ -397,13 +426,29 @@ class HyperresearchHandler(BaseHTTPRequestHandler):
 <body><div class="layout"><nav>{nav}</nav><div class="nav-handle"></div><main>{body_html}</main></div>{DRAG_JS}{extra_body}</body></html>"""
         self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self._send_security_headers()
         self.end_headers()
         self.wfile.write(full.encode("utf-8"))
+
+    def _send_security_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+
+    def _send_plain(self, code: int, text: str) -> None:
+        body = text.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self._send_security_headers()
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_json(self, data):
         body = json.dumps(data)
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
+        self._send_security_headers()
         self.end_headers()
         self.wfile.write(body.encode("utf-8"))
 

@@ -32,3 +32,5 @@ GEMINI.md
 research/
 
 .knack/
+.coverage
+coverage.xml
